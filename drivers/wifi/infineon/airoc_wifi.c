@@ -229,13 +229,13 @@ static whd_result_t airoc_wifi_host_buffer_get(whd_buffer_t *buffer, whd_buffer_
 
 static void airoc_wifi_buffer_release(whd_buffer_t buffer, whd_buffer_dir_t direction)
 {
-	CY_UNUSED_PARAMETER(direction);
+	ARG_UNUSED(direction);
 	(void)net_buf_destroy((struct net_buf *)buffer);
 }
 
 static uint8_t *airoc_wifi_buffer_get_current_piece_data_pointer(whd_buffer_t buffer)
 {
-	CY_ASSERT(buffer != NULL);
+	__ASSERT(buffer != NULL, "buffer should not be null");
 	struct net_buf *buf = (struct net_buf *)buffer;
 
 	return (uint8_t *)buf->data;
@@ -243,7 +243,7 @@ static uint8_t *airoc_wifi_buffer_get_current_piece_data_pointer(whd_buffer_t bu
 
 static uint16_t airoc_wifi_buffer_get_current_piece_size(whd_buffer_t buffer)
 {
-	CY_ASSERT(buffer != NULL);
+	__ASSERT(buffer != NULL, "buffer should not be null");
 	struct net_buf *buf = (struct net_buf *)buffer;
 
 	return (uint16_t)buf->size;
@@ -251,7 +251,7 @@ static uint16_t airoc_wifi_buffer_get_current_piece_size(whd_buffer_t buffer)
 
 static whd_result_t airoc_wifi_buffer_set_size(whd_buffer_t buffer, unsigned short size)
 {
-	CY_ASSERT(buffer != NULL);
+	__ASSERT(buffer != NULL, "buffer should not be null");
 	struct net_buf *buf = (struct net_buf *)buffer;
 
 	buf->size = size;
@@ -261,7 +261,7 @@ static whd_result_t airoc_wifi_buffer_set_size(whd_buffer_t buffer, unsigned sho
 static whd_result_t airoc_wifi_buffer_add_remove_at_front(whd_buffer_t *buffer,
 							  int32_t add_remove_amount)
 {
-	CY_ASSERT(buffer != NULL);
+	__ASSERT(buffer != NULL, "buffer should not be null");
 	struct net_buf **buf = (struct net_buf **)buffer;
 
 	if (add_remove_amount > 0) {
