@@ -1,0 +1,14 @@
+description: |
+  AIROC Wi-Fi Connectivity over SPI.
+
+compatible: "infineon,airoc-wifi"
+
+include: [spi-device.yaml, "infineon,airoc-wifi-common.yaml"]
+
+properties: 
+  wifi-host-wake-gpios:
+    required: true
+    description: |
+      Host wake-up gpio. Signal from the AIROC Wi-Fi device
+      to the host indicating that the device requires attention.
+    type: phandle-array

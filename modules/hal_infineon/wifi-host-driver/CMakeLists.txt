@@ -19,6 +19,7 @@ if(CONFIG_AIROC_WLAN_MFG_FIRMWARE)
   zephyr_compile_definitions(WLAN_MFG_FIRMWARE)
 endif()
 
+
 # Add WHD includes
 zephyr_include_directories(${hal_wifi_dir})
 zephyr_include_directories(${hal_wifi_dir}/WiFi_Host_Driver/inc)
@@ -49,7 +50,13 @@ zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/whd_wifi_p2p.c)
 # src/bus_protocols
 zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/bus_protocols/whd_bus.c)
 zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/bus_protocols/whd_bus_common.c)
-zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/bus_protocols/whd_bus_sdio_protocol.c)
+if (CONFIG_AIROC_WIFI_BUS_SDIO)
+  add_compile_definitions(COMPONENT_WIFI_INTERFACE_SDIO)
+  zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/bus_protocols/whd_bus_sdio_protocol.c)
+elseif (CONFIG_AIROC_WIFI_BUS_SPI)
+  add_compile_definitions(COMPONENT_WIFI_INTERFACE_SPI)
+  zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/src/bus_protocols/whd_bus_spi_protocol.c)
+endif()
 
 # resources/resource_imp
 zephyr_library_sources(${hal_wifi_dir}/WiFi_Host_Driver/resources/resource_imp/whd_resources.c)

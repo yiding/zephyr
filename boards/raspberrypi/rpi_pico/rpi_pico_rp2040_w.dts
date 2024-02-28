@@ -7,3 +7,31 @@
 /dts-v1/;
 
 #include "rpi_pico-common.dtsi"
+
+/ {
+  spi_wifi: spi_wifi0 {
+    compatible = "zephyr,spi-bitbang";
+    status = "disabled";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+    clk-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+		cs-gpios = <&gpio0 25 GPIO_ACTIVE_LOW>;
+		mosi-gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
+
+		wifi: wifi@0 {
+			status = "disabled";
+			compatible = "infineon,airoc-wifi";
+
+			reg = <0>;
+
+			wifi-reg-on-gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>;
+			wifi-host-wake-gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
+
+			/* SPI */
+			spi-max-frequency = <100000>;
+    	duplex = <2048>; /* SPI_HALF_DUPLEX */
+		};
+  };
+};

@@ -6,16 +6,25 @@
  */
 
 #include <whd_buffer_api.h>
-#include <zephyr/sd/sd.h>
-#include <zephyr/sd/sdio.h>
+#include <whd_types.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/net/wifi_mgmt.h>
 #include <cy_utils.h>
 
+#ifdef CONFIG_AIROC_WIFI_BUS_SDIO
+#include <zephyr/sd/sd.h>
+#include <zephyr/sd/sdio.h>
+#endif
+#ifdef CONFIG_AIROC_WIFI_BUS_SPI
+#include <zephyr/drivers/spi.h>
+#endif
+
 struct airoc_wifi_data {
+#ifdef CONFIG_AIROC_WIFI_BUS_SDIO
 	struct sd_card card;
 	struct sdio_func sdio_func1;
 	struct sdio_func sdio_func2;
+#endif
 	struct net_if *iface;
 	bool second_interface_init;
 	bool is_ap_up;
@@ -36,6 +45,10 @@ struct airoc_wifi_data {
 
 struct airoc_wifi_config {
 	const struct device *sdhc_dev;
+#ifdef CONFIG_AIROC_WIFI_BUS_SPI
+	struct spi_dt_spec bus;
+	whd_spi_config_t spi_config;
+#endif
 	struct gpio_dt_spec wifi_reg_on_gpio;
 	struct gpio_dt_spec wifi_host_wake_gpio;
 	struct gpio_dt_spec wifi_dev_wake_gpio;

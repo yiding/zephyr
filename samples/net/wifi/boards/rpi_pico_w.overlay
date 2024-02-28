@@ -1,0 +1,7 @@
+&spi_wifi {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+};

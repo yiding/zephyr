@@ -4,6 +4,11 @@
 config ZEPHYR_HAL_INFINEON_MODULE
 	bool
 
+config USE_INFINEON_ABSTRACTION_RTOS
+	bool "Abstraction RTOS component (Zephyr support)"
+	help
+	  Enable Abstraction RTOS component with Zephyr support
+
 if SOC_FAMILY_PSOC6 || SOC_FAMILY_INFINEON_CAT1
 
 config USE_INFINEON_ADC

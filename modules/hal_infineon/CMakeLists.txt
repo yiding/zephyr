@@ -13,8 +13,6 @@ if (CONFIG_HAS_XMCLIB)
 endif()
 
 if (CONFIG_SOC_FAMILY_INFINEON_CAT1A OR CONFIG_SOC_FAMILY_PSOC6)
-  ## Add core-lib sources for CAT1 devices
-  add_subdirectory(core-lib)
 
   ## Add mtb-pdl-cat1 sources for CAT1 devices
   add_subdirectory(mtb-pdl-cat1)
@@ -31,9 +29,6 @@ if (CONFIG_SOC_FAMILY_INFINEON_CAT1A)
   if(CONFIG_SOC_PSOC6_CM0P_IMAGE_SLEEP)
     add_subdirectory(cat1cm0p)
   endif()
-
-  ## Add abstraction-rtos sources
-  add_subdirectory(abstraction-rtos)
 endif()
 
 ## Add Wi-Fi assets for AIROC devices

@@ -5,7 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <airoc_wifi.h>
+#include "airoc_wifi.h"
+#include "airoc_whd_hal_common.h"
 
 #include <bus_protocols/whd_bus_sdio_protocol.h>
 #include <bus_protocols/whd_bus.h>
@@ -15,56 +16,17 @@
 
 #define DT_DRV_COMPAT infineon_airoc_wifi
 
-LOG_MODULE_REGISTER(infineon_airoc, CONFIG_WIFI_LOG_LEVEL);
+LOG_MODULE_DECLARE(infineon_airoc_wifi, CONFIG_WIFI_LOG_LEVEL);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Defines the amount of stack memory available for the wifi thread. */
-#if !defined(CY_WIFI_THREAD_STACK_SIZE)
-#define CY_WIFI_THREAD_STACK_SIZE (5120)
-#endif
-
-/** Defines the priority of the thread that services wifi packets. Legal values are defined by the
- *  RTOS being used.
- */
-#if !defined(CY_WIFI_THREAD_PRIORITY)
-#define CY_WIFI_THREAD_PRIORITY (CY_RTOS_PRIORITY_HIGH)
-#endif
-
-/** Defines the country this will operate in for wifi initialization parameters. See the
- *  wifi-host-driver's whd_country_code_t for legal options.
- */
-#if !defined(CY_WIFI_COUNTRY)
-#define CY_WIFI_COUNTRY (WHD_COUNTRY_AUSTRALIA)
-#endif
-
-/** Defines the priority of the interrupt that handles out-of-band notifications from the wifi
- *  chip. Legal values are defined by the MCU running this code.
- */
-#if !defined(CY_WIFI_OOB_INTR_PRIORITY)
-#define CY_WIFI_OOB_INTR_PRIORITY (2)
-#endif
-
-/** Defines whether to use the out-of-band pin to allow the WIFI chip to wake up the MCU. */
-#if defined(CY_WIFI_HOST_WAKE_SW_FORCE)
-#define CY_USE_OOB_INTR (CY_WIFI_HOST_WAKE_SW_FORCE)
-#else
-#define CY_USE_OOB_INTR (1u)
-#endif /* defined(CY_WIFI_HOST_WAKE_SW_FORCE) */
-
-#define CY_WIFI_HOST_WAKE_IRQ_EVENT GPIO_INT_TRIG_LOW
-#define DEFAULT_OOB_PIN             (0)
-#define WLAN_POWER_UP_DELAY_MS      (250)
-#define WLAN_CBUCK_DISCHARGE_MS     (10)
-
-extern whd_resource_source_t resource_ops;
-
+// From whd_bus_sdio_protocol.c
 struct whd_bus_priv {
-	whd_sdio_config_t sdio_config;
-	whd_bus_stats_t whd_bus_stats;
-	whd_sdio_t sdio_obj;
+       whd_sdio_config_t sdio_config;
+       whd_bus_stats_t whd_bus_stats;
+       whd_sdio_t sdio_obj;
 };
 
 static whd_init_config_t init_config_default = {
@@ -78,44 +40,6 @@ static whd_init_config_t init_config_default = {
  *                 Function
  ******************************************************/
 
-int airoc_wifi_power_on(const struct device *dev)
-{
-#if DT_INST_NODE_HAS_PROP(0, wifi_reg_on_gpios)
-	int ret;
-	const struct airoc_wifi_config *config = dev->config;
-
-	/* Check WIFI REG_ON gpio instance */
-	if (!device_is_ready(config->wifi_reg_on_gpio.port)) {
-		LOG_ERR("Error: failed to configure wifi_reg_on %s pin %d",
-			config->wifi_reg_on_gpio.port->name, config->wifi_reg_on_gpio.pin);
-		return -EIO;
-	}
-
-	/* Configure wifi_reg_on as output  */
-	ret = gpio_pin_configure_dt(&config->wifi_reg_on_gpio, GPIO_OUTPUT);
-	if (ret) {
-		LOG_ERR("Error %d: failed to configure wifi_reg_on %s pin %d", ret,
-			config->wifi_reg_on_gpio.port->name, config->wifi_reg_on_gpio.pin);
-		return ret;
-	}
-	ret = gpio_pin_set_dt(&config->wifi_reg_on_gpio, 0);
-	if (ret) {
-		return ret;
-	}
-
-	/* Allow CBUCK regulator to discharge */
-	(void)k_msleep(WLAN_CBUCK_DISCHARGE_MS);
-
-	/* WIFI power on */
-	ret = gpio_pin_set_dt(&config->wifi_reg_on_gpio, 1);
-	if (ret) {
-		return ret;
-	}
-	(void)k_msleep(WLAN_POWER_UP_DELAY_MS);
-#endif /* DT_INST_NODE_HAS_PROP(0, reg_on_gpios) */
-
-	return 0;
-}
 
 int airoc_wifi_init_primary(const struct device *dev, whd_interface_t *interface,
 			    whd_netif_funcs_t *netif_funcs, whd_buffer_funcs_t *buffer_if)
@@ -308,28 +232,28 @@ whd_result_t whd_bus_sdio_irq_enable(whd_driver_t whd_driver, whd_bool_t enable)
  */
 
 void whd_bus_sdio_oob_irq_handler(const struct device *port, struct gpio_callback *cb,
-				  gpio_port_pins_t pins)
+                                 gpio_port_pins_t pins)
 {
 #if DT_INST_NODE_HAS_PROP(0, wifi_host_wake_gpios)
-	struct airoc_wifi_data *data = CONTAINER_OF(cb, struct airoc_wifi_data, host_oob_pin_cb);
+       struct airoc_wifi_data *data = CONTAINER_OF(cb, struct airoc_wifi_data, host_oob_pin_cb);
 
-	/* Get OOB pin info */
-	const whd_oob_config_t *oob_config = &data->whd_drv->bus_priv->sdio_config.oob_config;
-	const struct gpio_dt_spec *host_oob_pin = oob_config->host_oob_pin;
+       /* Get OOB pin info */
+       const whd_oob_config_t *oob_config = &data->whd_drv->bus_priv->sdio_config.oob_config;
+			 const struct gpio_dt_spec *host_oob_pin = oob_config->host_oob_pin;
 
-	/* Check OOB state is correct */
-	int expected_event = (oob_config->is_falling_edge == WHD_TRUE) ? 0 : 1;
+       /* Check OOB state is correct */
+       int expected_event = (oob_config->is_falling_edge == WHD_TRUE) ? 0 : 1;
 
-	if (!(pins & BIT(host_oob_pin->pin)) || (gpio_pin_get_dt(host_oob_pin) != expected_event)) {
-		WPRINT_WHD_ERROR(("Unexpected interrupt event %d\n", expected_event));
-		WHD_BUS_STATS_INCREMENT_VARIABLE(data->whd_drv->bus_priv, error_intrs);
-		return;
-	}
+       if (!(pins & BIT(host_oob_pin->pin)) || (gpio_pin_get_dt(host_oob_pin) != expected_event)) {
+               WPRINT_WHD_ERROR(("Unexpected interrupt event %d\n", expected_event));
+               WHD_BUS_STATS_INCREMENT_VARIABLE(data->whd_drv->bus_priv, error_intrs);
+               return;
+       }
 
-	WHD_BUS_STATS_INCREMENT_VARIABLE(data->whd_drv->bus_priv, oob_intrs);
+       WHD_BUS_STATS_INCREMENT_VARIABLE(data->whd_drv->bus_priv, oob_intrs);
 
-	/* Call thread notify to wake up WHD thread */
-	whd_thread_notify_irq(data->whd_drv);
+       /* Call thread notify to wake up WHD thread */
+       whd_thread_notify_irq(data->whd_drv);
 
 #endif /* DT_INST_NODE_HAS_PROP(0, wifi-host-wake-gpios) */
 }
@@ -415,24 +339,6 @@ whd_result_t whd_bus_sdio_enable_oob_intr(whd_driver_t whd_driver, whd_bool_t en
 	return WHD_SUCCESS;
 }
 
-/*
- * Implement WHD memory wrappers
- */
-
-void *whd_mem_malloc(size_t size)
-{
-	return k_malloc(size);
-}
-
-void *whd_mem_calloc(size_t nitems, size_t size)
-{
-	return k_calloc(nitems, size);
-}
-
-void whd_mem_free(void *ptr)
-{
-	k_free(ptr);
-}
 
 #ifdef __cplusplus
 } /* extern "C" */
