@@ -200,3 +200,9 @@ properties:
       - 0x22 # TMAG5273_DT_I2C_STARTUP_ADDRESS_B1_B2 (TMAG5273B1/B2)
       - 0x78 # TMAG5273_DT_I2C_STARTUP_ADDRESS_C1_C2 (TMAG5273C1/C2)
       - 0x44 # TMAG5273_DT_I2C_STARTUP_ADDRESS_D1_D2 (TMAG5273D1/D2)
+
+  supply-gpios:
+    type: phandle-array
+    description: |
+      GPIO used to power the sensor, used for staged power up of multiple
+      sensors for address changes.

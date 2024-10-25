@@ -1327,6 +1327,9 @@ static int tmag5273_init(const struct device *dev)
 			return -EIO;
 		}
 
+		retval = gpio_pin_set_dt(&drv_cfg->supply_gpio, 0);
+		k_usleep(TMAG5273_T_STARTUP_US);
+
 		retval = gpio_pin_set_dt(&drv_cfg->supply_gpio, 1);
 		if (retval < 0) {
 			LOG_ERR("could not activate sensor %d", retval);
