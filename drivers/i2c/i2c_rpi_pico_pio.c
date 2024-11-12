@@ -42,6 +42,11 @@ struct i2c_pio_data {
 	struct k_mutex lock;
 	dma_channel_config dma_tx_config;
 	uint32_t config;
+
+	uint32_t last_flags;
+	uint32_t last_len;
+	uint32_t tx_buf_len;
+	uint16_t tx_buf[64];
 };
 
 /**
@@ -332,33 +337,25 @@ static int pio_i2c_write_blocking(PIO pio, uint sm, uint8_t addr, uint8_t *txbuf
 	return err;
 }
 
-static int pio_i2c_read_dma(const struct i2c_pio_config *cfg, struct i2c_pio_data *data,
-			    uint8_t addr, uint8_t *rxbuf, uint len, uint8_t flags)
+static void pio_i2c_prep_read_tx_buf(struct i2c_pio_data *data, uint8_t addr, uint len,
+				     uint8_t flags)
 {
-
-	int err = 0;
-
-	PIO pio = pio_rpi_pico_get_pio(cfg->piodev);
-	uint sm = cfg->sm;
-
-	pio_i2c_rx_enable(pio, sm, true);
-	while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
-		(void)pio_i2c_get(pio, sm);
+	if (data->last_flags == flags && data->last_len == len) {
+		if (flags & I2C_MSG_RESTART) {
+			data->tx_buf[ARRAY_SIZE(REPSTART_INSTS)] = (addr << 2) | 3u;
+		} else {
+			data->tx_buf[ARRAY_SIZE(START_INSTS)] = (addr << 2) | 3u;
+		}
+		return;
 	}
 
-	// TODO use zephyr dma api
-
-	// Set up DMA
 	/* TX will send: */
 	/* 1. start/repstart */
 	/* 2. address byte */
 	/* 3. len - 1 bytes of 0xff<<1 */
 	/* 4. final byte of 0xff<<1 | 1<<PIO_I2C_FINAL_LSB | 1<<PIO_I2C_NAK_LSB */
 	/* 5. maybe a stop. */
-
-	uint16_t dma_buf[MAX(ARRAY_SIZE(REPSTART_INSTS), ARRAY_SIZE(START_INSTS)) + 1 + (len - 1) +
-			 1 + ARRAY_SIZE(STOP_INSTS)];
-	uint16_t *p = dma_buf;
+	uint16_t *p = data->tx_buf;
 	if (flags & I2C_MSG_RESTART) {
 		memcpy(p, REPSTART_INSTS, sizeof(REPSTART_INSTS));
 		p += ARRAY_SIZE(REPSTART_INSTS);
@@ -376,8 +373,30 @@ static int pio_i2c_read_dma(const struct i2c_pio_config *cfg, struct i2c_pio_dat
 		p += ARRAY_SIZE(STOP_INSTS);
 	}
 
-	dma_channel_configure(cfg->dma_tx.channel, &data->dma_tx_config, &pio->txf[sm], &dma_buf[0],
-			      p - dma_buf, true);
+	data->last_flags = flags;
+	data->last_len = len;
+	data->tx_buf_len = p - data->tx_buf;
+}
+
+static int pio_i2c_read_dma(const struct i2c_pio_config *cfg, struct i2c_pio_data *data,
+			    uint8_t addr, uint8_t *rxbuf, uint len, uint8_t flags)
+{
+
+	int err = 0;
+
+	PIO pio = pio_rpi_pico_get_pio(cfg->piodev);
+	uint sm = cfg->sm;
+
+	pio_i2c_rx_enable(pio, sm, true);
+	while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+		(void)pio_i2c_get(pio, sm);
+	}
+
+	pio_i2c_prep_read_tx_buf(data, addr, len, flags);
+	/* TODO use zephyr dma api */
+	/* Set up DMA */
+	dma_channel_configure(cfg->dma_tx.channel, &data->dma_tx_config, &pio->txf[sm],
+			      data->tx_buf, data->tx_buf_len, true);
 
 	/* Now read by polling, while checking for error. */
 	bool first = true;
