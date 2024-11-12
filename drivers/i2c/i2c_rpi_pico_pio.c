@@ -10,24 +10,37 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/pinctrl.h>
+#include <zephyr/drivers/dma.h>
+#include <zephyr/timing/timing.h>
 
 #include <zephyr/drivers/misc/pio_rpi_pico/pio_rpi_pico.h>
 
+#include <hardware/dma.h>
 #include <hardware/claim.h>
 
 LOG_MODULE_REGISTER(i2c_pio);
 
 #define DT_DRV_COMPAT raspberrypi_pico_pio_i2c
 
+struct i2c_pio_dma_config {
+	const struct device *dev;
+	uint32_t channel;
+	uint32_t config;
+	uint32_t slot;
+};
+
 struct i2c_pio_config {
 	const struct device *piodev;
 	uint sm;
 	const struct pinctrl_dev_config *pin_cfg;
 	uint32_t bitrate;
+
+	struct i2c_pio_dma_config dma_tx;
 };
 
 struct i2c_pio_data {
 	struct k_mutex lock;
+	dma_channel_config dma_tx_config;
 	uint32_t config;
 };
 
@@ -81,8 +94,12 @@ struct i2c_pio_data {
 #define i2c_wrap               18
 #define i2c_offset_entry_point 13u
 static const uint16_t i2c_program_instructions[] = {
+	/* Got NAK, if not final byte of transfer, interrupt and halt here. */
+	/* Driver is expected to reset this state machine. */
 	0x008d, /*  0: jmp    y--, 13 */
 	0xc030, /*  1: irq    wait 0 rel */
+
+	/* Read write starts here. Thee next 8 bits of out is data to write. */
 	0xa0c3, /*  2: mov    isr, null */
 	0xe027, /*  3: set    x, 7 */
 	0x6781, /*  4: out    pindirs, 1             [7] */
@@ -90,14 +107,25 @@ static const uint16_t i2c_program_instructions[] = {
 	0x24a1, /*  6: wait   1 pin, 1               [4] */
 	0x4701, /*  7: in     pins, 1                [7] */
 	0x1744, /*  8: jmp    x--, 4          side 0 [7] */
+
+	/* Full byte is written, check for NAK. */
 	0x6781, /*  9: out    pindirs, 1             [7] */
 	0xbf42, /* 10: nop                    side 1 [7] */
 	0x27a1, /* 11: wait   1 pin, 1               [7] */
 	0x12c0, /* 12: jmp    pin, 0          side 0 [2] */
+
 	/*     .wrap_target */
+	/* Program starts here. */
+	/* Read a data or instruction word from TX fifo. */
+	/* First 6 bits indicate instruction count to execute. */
 	0x6026, /* 13: out    x, 6 */
+	/* Next bit indicates "final" */
 	0x6041, /* 14: out    y, 1 */
+	/* Check if x!=0, which means that x+1 following words are instructions */
+	/* to execute. */
 	0x0022, /* 15: jmp    !x, 2 */
+
+	/* Discard remaining bits in OSR, just execute instructions. */
 	0x6060, /* 16: out    null, 32 */
 	0x60f0, /* 17: out    exec, 16 */
 	0x0051, /* 18: jmp    x--, 17 */
@@ -304,19 +332,97 @@ static int pio_i2c_write_blocking(PIO pio, uint sm, uint8_t addr, uint8_t *txbuf
 	return err;
 }
 
+static int pio_i2c_read_dma(const struct i2c_pio_config *cfg, struct i2c_pio_data *data,
+			    uint8_t addr, uint8_t *rxbuf, uint len, uint8_t flags)
+{
+
+	int err = 0;
+
+	PIO pio = pio_rpi_pico_get_pio(cfg->piodev);
+	uint sm = cfg->sm;
+
+	pio_i2c_rx_enable(pio, sm, true);
+	while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+		(void)pio_i2c_get(pio, sm);
+	}
+
+	// TODO use zephyr dma api
+
+	// Set up DMA
+	/* TX will send: */
+	/* 1. start/repstart */
+	/* 2. address byte */
+	/* 3. len - 1 bytes of 0xff<<1 */
+	/* 4. final byte of 0xff<<1 | 1<<PIO_I2C_FINAL_LSB | 1<<PIO_I2C_NAK_LSB */
+	/* 5. maybe a stop. */
+
+	uint16_t dma_buf[MAX(ARRAY_SIZE(REPSTART_INSTS), ARRAY_SIZE(START_INSTS)) + 1 + (len - 1) +
+			 1 + ARRAY_SIZE(STOP_INSTS)];
+	uint16_t *p = dma_buf;
+	if (flags & I2C_MSG_RESTART) {
+		memcpy(p, REPSTART_INSTS, sizeof(REPSTART_INSTS));
+		p += ARRAY_SIZE(REPSTART_INSTS);
+	} else {
+		memcpy(p, START_INSTS, sizeof(START_INSTS));
+		p += ARRAY_SIZE(START_INSTS);
+	}
+	*(p++) = (addr << 2) | 3u;
+	for (int i = 0; i < len - 1; ++i) {
+		*(p++) = (0xff << 1);
+	}
+	*(p++) = (0xff << 1) | (1 << PIO_I2C_FINAL_LSB) | (1 << PIO_I2C_NAK_LSB);
+	if (flags & I2C_MSG_STOP) {
+		memcpy(p, STOP_INSTS, sizeof(STOP_INSTS));
+		p += ARRAY_SIZE(STOP_INSTS);
+	}
+
+	dma_channel_configure(cfg->dma_tx.channel, &data->dma_tx_config, &pio->txf[sm], &dma_buf[0],
+			      p - dma_buf, true);
+
+	/* Now read by polling, while checking for error. */
+	bool first = true;
+	while (len && !pio_i2c_check_error(pio, sm)) {
+		if (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+			if (first) {
+				/* Ignore returned address byte */
+				(void)pio_i2c_get(pio, sm);
+				first = false;
+			} else {
+				--len;
+				*rxbuf++ = pio_i2c_get(pio, sm);
+			}
+		} else {
+			k_yield();
+		}
+	}
+
+	pio_i2c_wait_idle(pio, sm);
+	if (pio_i2c_check_error(pio, sm)) {
+		/* stop dma if ongoing. */
+		dma_channel_abort(cfg->dma_tx.channel);
+		while (dma_channel_is_busy(cfg->dma_tx.channel)) {
+			k_yield();
+		}
+		err = -1;
+		pio_i2c_resume_after_error(pio, sm);
+		pio_i2c_stop(pio, sm);
+	}
+	return err;
+}
+
 static int pio_i2c_read_blocking(PIO pio, uint sm, uint8_t addr, uint8_t *rxbuf, uint len,
 				 uint8_t flags)
 {
 	int err = 0;
+	pio_i2c_rx_enable(pio, sm, true);
+	while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+		(void)pio_i2c_get(pio, sm);
+	}
 
 	if (flags & I2C_MSG_RESTART) {
 		pio_i2c_repstart(pio, sm);
 	} else {
 		pio_i2c_start(pio, sm);
-	}
-	pio_i2c_rx_enable(pio, sm, true);
-	while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
-		(void)pio_i2c_get(pio, sm);
 	}
 	pio_i2c_put16(pio, sm, (addr << 2) | 3u);
 	uint32_t tx_remain = len; /* Need to stuff 0xff bytes in to get clocks */
@@ -341,7 +447,7 @@ static int pio_i2c_read_blocking(PIO pio, uint sm, uint8_t addr, uint8_t *rxbuf,
 				*rxbuf++ = pio_i2c_get(pio, sm);
 			}
 		} else {
-			k_yield();
+			k_usleep(1);
 		}
 	}
 	if (flags & I2C_MSG_STOP) {
@@ -391,8 +497,12 @@ static int i2c_pio_transfer(const struct device *dev, struct i2c_msg *msgs, uint
 
 	for (int i = 0; i < num_msgs; i++) {
 		if (msgs[i].flags & I2C_MSG_READ) {
-			rc = pio_i2c_read_blocking(pio, sm, addr, msgs[i].buf, msgs[i].len,
-						   msgs[i].flags);
+#if 0
+			rc = pio_i2c_read_blocking(pio, sm, addr, msgs[i].buf, msgs[i].len, msgs[i].flags);
+#else
+			rc = pio_i2c_read_dma(cfg, data, addr, msgs[i].buf, msgs[i].len,
+					      msgs[i].flags);
+#endif
 		} else {
 			rc = pio_i2c_write_blocking(pio, sm, addr, msgs[i].buf, msgs[i].len,
 						    msgs[i].flags);
@@ -545,8 +655,25 @@ static int i2c_pio_init(const struct device *dev)
 	pio_sm_init(pio, sm, i2c_offset_entry_point + program_offset, &sm_cfg);
 	pio_sm_set_enabled(pio, sm, true);
 
+	/* Pre-generate the dma channel config since it does not change. */
+	dma_channel_config *dma_cfg = &data->dma_tx_config;
+	*dma_cfg = dma_channel_get_default_config(cfg->dma_tx.channel);
+	channel_config_set_transfer_data_size(dma_cfg, DMA_SIZE_16);
+	channel_config_set_read_increment(dma_cfg, true);
+	channel_config_set_write_increment(dma_cfg, false);
+	channel_config_set_dreq(dma_cfg, pio_get_dreq(pio, sm, true));
+	channel_config_set_irq_quiet(dma_cfg, true);
+
 	return 0;
 }
+
+#define DMA_INIT(inst, dir)                                                                        \
+	{                                                                                          \
+		.dev = DEVICE_DT_GET(DT_INST_DMAS_CTLR_BY_NAME(inst, dir)),                        \
+		.channel = DT_INST_DMAS_CELL_BY_NAME(inst, dir, channel),                          \
+		.slot = DT_INST_DMAS_CELL_BY_NAME(inst, dir, slot),                                \
+		.config = DT_INST_DMAS_CELL_BY_NAME(inst, dir, channel_config),                    \
+	}
 
 #define DEFINE_I2C_PIO(inst)                                                                       \
 	PINCTRL_DT_INST_DEFINE(inst);                                                              \
@@ -558,6 +685,7 @@ static int i2c_pio_init(const struct device *dev)
 		.sm = DT_INST_REG_ADDR(inst),                                                      \
 		.pin_cfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                   \
 		.bitrate = DT_INST_PROP(inst, clock_frequency),                                    \
+		.dma_tx = COND_CODE_1(DT_INST_DMAS_HAS_NAME(inst, tx), (DMA_INIT(inst, tx)), ({0})),            \
 	};                                                                                         \
                                                                                                    \
 	I2C_DEVICE_DT_INST_DEFINE(inst, i2c_pio_init, NULL, &i2c_pio_dev_data_##inst,              \

@@ -253,6 +253,7 @@ config I2C_RPI_PICO_PIO
 	default y
 	depends on DT_HAS_RASPBERRYPI_PICO_PIO_I2C_ENABLED
 	select PICOSDK_USE_PIO
+	select DMA
 	help
 	  Enable the Raspberry Pi Pico PIO I2C driver.
 
